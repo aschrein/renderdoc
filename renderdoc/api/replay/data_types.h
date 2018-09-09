@@ -966,6 +966,13 @@ struct DrawcallDescription
     for(int i = 0; i < 8; i++)
       outputs[i] = ResourceId();
     depthOut = ResourceId();
+
+    psHash = 0;
+    vsHash = 0;
+    dsHash = 0;
+    hsHash = 0;
+    csHash = 0;
+    gsHash = 0;
   }
   DOCUMENT("");
   bool operator==(const DrawcallDescription &o) const { return eventId == o.eventId; }
@@ -1064,6 +1071,13 @@ for very coarse bucketing of drawcalls into similar passes by their outputs.
 
   DOCUMENT("A list of :class:`DrawcallDescription` child drawcalls.");
   rdcarray<DrawcallDescription> children;
+
+  uint32_t psHash;
+  uint32_t vsHash;
+  uint32_t gsHash;
+  uint32_t dsHash;
+  uint32_t hsHash;
+  uint32_t csHash;
 };
 
 DECLARE_REFLECTION_STRUCT(DrawcallDescription);

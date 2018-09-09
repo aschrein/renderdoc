@@ -23,10 +23,10 @@
  * THE SOFTWARE.
  ******************************************************************************/
 
-#include "d3d11_context.h"
 #include "3rdparty/tinyfiledialogs/tinyfiledialogs.h"
 #include "driver/dx/official/dxgi1_3.h"
 #include "strings/string_utils.h"
+#include "d3d11_context.h"
 #include "d3d11_debug.h"
 #include "d3d11_renderstate.h"
 #include "d3d11_resources.h"
@@ -2144,8 +2144,10 @@ bool WrappedID3D11DeviceContext::Serialise_SOSetTargets(SerialiserType &ser, UIN
         SAFE_RELEASE(m_StreamOutCounters[id].query);
 
         D3D11_QUERY queryTypes[] = {
-            D3D11_QUERY_SO_STATISTICS_STREAM0, D3D11_QUERY_SO_STATISTICS_STREAM1,
-            D3D11_QUERY_SO_STATISTICS_STREAM2, D3D11_QUERY_SO_STATISTICS_STREAM3,
+            D3D11_QUERY_SO_STATISTICS_STREAM0,
+            D3D11_QUERY_SO_STATISTICS_STREAM1,
+            D3D11_QUERY_SO_STATISTICS_STREAM2,
+            D3D11_QUERY_SO_STATISTICS_STREAM3,
         };
 
         D3D11_QUERY_DESC qdesc;
@@ -2254,8 +2256,10 @@ void WrappedID3D11DeviceContext::SOSetTargets(UINT NumBuffers, ID3D11Buffer *con
       SAFE_RELEASE(m_StreamOutCounters[id].query);
 
       D3D11_QUERY queryTypes[] = {
-          D3D11_QUERY_SO_STATISTICS_STREAM0, D3D11_QUERY_SO_STATISTICS_STREAM1,
-          D3D11_QUERY_SO_STATISTICS_STREAM2, D3D11_QUERY_SO_STATISTICS_STREAM3,
+          D3D11_QUERY_SO_STATISTICS_STREAM0,
+          D3D11_QUERY_SO_STATISTICS_STREAM1,
+          D3D11_QUERY_SO_STATISTICS_STREAM2,
+          D3D11_QUERY_SO_STATISTICS_STREAM3,
       };
 
       D3D11_QUERY_DESC qdesc;
@@ -3669,6 +3673,16 @@ void WrappedID3D11DeviceContext::Serialise_DebugMessages(SerialiserType &ser)
   }
 }
 
+#define getShaderHash(TY, SNAME)                                                                 \
+  \
+if(m_CurrentPipelineState->SNAME.Object)                                                            \
+  {                                                                                              \
+    auto BC =                                                                                    \
+        static_cast<WrappedID3D11Shader<TY> *>(m_CurrentPipelineState->SNAME.Object)->GetDXBC(); \
+    BC->GetHash(hash, &BC->m_ShaderBlob[0], BC->m_ShaderBlob.size());                            \
+  }                                                                                              \
+  else hash[0] = 0;
+
 template <typename SerialiserType>
 bool WrappedID3D11DeviceContext::Serialise_DrawIndexedInstanced(
     SerialiserType &ser, UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation,
@@ -3703,7 +3717,17 @@ bool WrappedID3D11DeviceContext::Serialise_DrawIndexedInstanced(
       draw.indexOffset = StartIndexLocation;
       draw.baseVertex = BaseVertexLocation;
       draw.instanceOffset = StartInstanceLocation;
-
+      uint32_t hash[4];
+      getShaderHash(ID3D11PixelShader, PS);
+      draw.psHash = hash[0];
+      getShaderHash(ID3D11VertexShader, VS);
+      draw.vsHash = hash[0];
+      getShaderHash(ID3D11GeometryShader, GS);
+      draw.gsHash = hash[0];
+      getShaderHash(ID3D11HullShader, HS);
+      draw.hsHash = hash[0];
+      getShaderHash(ID3D11DomainShader, DS);
+      draw.dsHash = hash[0];
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed;
 
       AddDrawcall(draw, true);
@@ -3839,6 +3863,17 @@ bool WrappedID3D11DeviceContext::Serialise_DrawIndexed(SerialiserType &ser, UINT
       draw.numIndices = IndexCount;
       draw.baseVertex = BaseVertexLocation;
       draw.indexOffset = StartIndexLocation;
+      uint32_t hash[4];
+      getShaderHash(ID3D11PixelShader, PS);
+      draw.psHash = hash[0];
+      getShaderHash(ID3D11VertexShader, VS);
+      draw.vsHash = hash[0];
+      getShaderHash(ID3D11GeometryShader, GS);
+      draw.gsHash = hash[0];
+      getShaderHash(ID3D11HullShader, HS);
+      draw.hsHash = hash[0];
+      getShaderHash(ID3D11DomainShader, DS);
+      draw.dsHash = hash[0];
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Indexed;
 
@@ -3899,7 +3934,17 @@ bool WrappedID3D11DeviceContext::Serialise_Draw(SerialiserType &ser, UINT Vertex
       draw.name = StringFormat::Fmt("Draw(%u)", VertexCount);
       draw.numIndices = VertexCount;
       draw.vertexOffset = StartVertexLocation;
-
+      uint32_t hash[4];
+      getShaderHash(ID3D11PixelShader, PS);
+      draw.psHash = hash[0];
+      getShaderHash(ID3D11VertexShader, VS);
+      draw.vsHash = hash[0];
+      getShaderHash(ID3D11GeometryShader, GS);
+      draw.gsHash = hash[0];
+      getShaderHash(ID3D11HullShader, HS);
+      draw.hsHash = hash[0];
+      getShaderHash(ID3D11DomainShader, DS);
+      draw.dsHash = hash[0];
       draw.flags |= DrawFlags::Drawcall;
 
       AddDrawcall(draw, true);
@@ -4136,7 +4181,17 @@ bool WrappedID3D11DeviceContext::Serialise_DrawIndexedInstancedIndirect(Serialis
 
       draw.flags |=
           DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indexed | DrawFlags::Indirect;
-
+      uint32_t hash[4];
+      getShaderHash(ID3D11PixelShader, PS);
+      draw.psHash = hash[0];
+      getShaderHash(ID3D11VertexShader, VS);
+      draw.vsHash = hash[0];
+      getShaderHash(ID3D11GeometryShader, GS);
+      draw.gsHash = hash[0];
+      getShaderHash(ID3D11HullShader, HS);
+      draw.hsHash = hash[0];
+      getShaderHash(ID3D11DomainShader, DS);
+      draw.dsHash = hash[0];
       AddDrawcall(draw, true);
     }
   }
@@ -4262,7 +4317,17 @@ bool WrappedID3D11DeviceContext::Serialise_DrawInstancedIndirect(SerialiserType 
       draw.name = name;
 
       draw.flags |= DrawFlags::Drawcall | DrawFlags::Instanced | DrawFlags::Indirect;
-
+      uint32_t hash[4];
+      getShaderHash(ID3D11PixelShader, PS);
+      draw.psHash = hash[0];
+      getShaderHash(ID3D11VertexShader, VS);
+      draw.vsHash = hash[0];
+      getShaderHash(ID3D11GeometryShader, GS);
+      draw.gsHash = hash[0];
+      getShaderHash(ID3D11HullShader, HS);
+      draw.hsHash = hash[0];
+      getShaderHash(ID3D11DomainShader, DS);
+      draw.dsHash = hash[0];
       AddDrawcall(draw, true);
     }
   }
@@ -4812,7 +4877,9 @@ bool WrappedID3D11DeviceContext::Serialise_Dispatch(SerialiserType &ser, UINT Th
       draw.dispatchDimension[0] = ThreadGroupCountX;
       draw.dispatchDimension[1] = ThreadGroupCountY;
       draw.dispatchDimension[2] = ThreadGroupCountZ;
-
+      uint32_t hash[4];
+      getShaderHash(ID3D11ComputeShader, CS);
+      draw.csHash = hash[0];
       if(ThreadGroupCountX == 0)
         m_pDevice->AddDebugMessage(
             MessageCategory::Execution, MessageSeverity::Medium, MessageSource::IncorrectAPIUse,

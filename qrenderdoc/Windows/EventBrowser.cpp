@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  ******************************************************************************/
 
-#include "EventBrowser.h"
 #include <QAbstractSpinBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -38,6 +37,7 @@
 #include "Code/Resources.h"
 #include "Widgets/Extended/RDHeaderView.h"
 #include "Widgets/Extended/RDListWidget.h"
+#include "EventBrowser.h"
 #include "ui_EventBrowser.h"
 
 struct EventItemTag
@@ -61,6 +61,12 @@ enum
   COL_EID,
   COL_DRAW,
   COL_DURATION,
+  COL_PS_HASH,
+  COL_VS_HASH,
+  COL_GS_HASH,
+  COL_HS_HASH,
+  COL_DS_HASH,
+  COL_CS_HASH,
   COL_COUNT,
 };
 
@@ -90,8 +96,10 @@ EventBrowser::EventBrowser(ICaptureContext &ctx, QWidget *parent)
   ui->find->setFont(Formatter::PreferredFont());
   ui->events->setFont(Formatter::PreferredFont());
 
-  ui->events->setColumns(
-      {tr("Name"), lit("EID"), lit("Draw #"), lit("Duration - replaced in UpdateDurationColumn")});
+  ui->events->setColumns({tr("Name"), lit("EID"), lit("Draw #"),
+                          lit("Duration - replaced in UpdateDurationColumn"), lit("PS hash"),
+                          lit("VS hash"), lit("GS hash"), lit("HS hash"), lit("DS hash"),
+                          lit("CS hash")});
 
   ui->events->setHeader(new RDHeaderView(Qt::Horizontal, this));
   ui->events->header()->setStretchLastSection(true);
@@ -102,6 +110,12 @@ EventBrowser::EventBrowser(ICaptureContext &ctx, QWidget *parent)
   ui->events->header()->setSectionResizeMode(COL_EID, QHeaderView::Interactive);
   ui->events->header()->setSectionResizeMode(COL_DRAW, QHeaderView::Interactive);
   ui->events->header()->setSectionResizeMode(COL_DURATION, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_PS_HASH, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_VS_HASH, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_GS_HASH, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_CS_HASH, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_HS_HASH, QHeaderView::Interactive);
+  ui->events->header()->setSectionResizeMode(COL_DS_HASH, QHeaderView::Interactive);
 
   ui->events->setColumnAlignment(COL_DURATION, Qt::AlignRight | Qt::AlignCenter);
 
@@ -116,6 +130,12 @@ EventBrowser::EventBrowser(ICaptureContext &ctx, QWidget *parent)
 
   // set up default section layout. This will be overridden in restoreState()
   ui->events->header()->resizeSection(COL_EID, 80);
+  ui->events->header()->resizeSection(COL_PS_HASH, 60);
+  ui->events->header()->resizeSection(COL_VS_HASH, 60);
+  ui->events->header()->resizeSection(COL_GS_HASH, 60);
+  ui->events->header()->resizeSection(COL_DS_HASH, 60);
+  ui->events->header()->resizeSection(COL_HS_HASH, 60);
+  ui->events->header()->resizeSection(COL_CS_HASH, 60);
   ui->events->header()->resizeSection(COL_DRAW, 60);
   ui->events->header()->resizeSection(COL_NAME, 200);
   ui->events->header()->resizeSection(COL_DURATION, 80);
@@ -227,10 +247,12 @@ EventBrowser::~EventBrowser()
 void EventBrowser::OnCaptureLoaded()
 {
   RDTreeWidgetItem *frame = new RDTreeWidgetItem(
-      {QFormatStr("Frame #%1").arg(m_Ctx.FrameInfo().frameNumber), QString(), QString(), QString()});
+      {QFormatStr("Frame #%1").arg(m_Ctx.FrameInfo().frameNumber), QString(), QString(), QString(),
+       QString(), QString(), QString(), QString(), QString(), QString()});
 
   RDTreeWidgetItem *framestart =
-      new RDTreeWidgetItem({tr("Frame Start"), lit("0"), lit("0"), QString()});
+      new RDTreeWidgetItem({tr("Frame Start"), lit("0"), lit("0"), QString(), QString(), QString(),
+                            QString(), QString(), QString(), QString()});
   framestart->setTag(QVariant::fromValue(EventItemTag(0, 0)));
 
   frame->addChild(framestart);
@@ -276,6 +298,11 @@ void EventBrowser::OnEventChanged(uint32_t eventId)
   highlightBookmarks();
 }
 
+static QString getHashString(uint32_t hash)
+{
+  return hash ? QFormatStr("%1").arg(hash, 8, 16, QLatin1Char('0')).toUpper() : lit("-");
+}
+
 QPair<uint32_t, uint32_t> EventBrowser::AddDrawcalls(RDTreeWidgetItem *parent,
                                                      const rdcarray<DrawcallDescription> &draws)
 {
@@ -290,7 +317,10 @@ QPair<uint32_t, uint32_t> EventBrowser::AddDrawcalls(RDTreeWidgetItem *parent,
     RichResourceTextInitialise(name);
 
     RDTreeWidgetItem *child = new RDTreeWidgetItem(
-        {name, QString::number(d.eventId), QString::number(d.drawcallId), lit("---")});
+        {name, QString::number(d.eventId), QString::number(d.drawcallId), lit("---"),
+         getHashString(d.psHash), getHashString(d.vsHash),
+         getHashString(d.gsHash), getHashString(d.hsHash),
+         getHashString(d.dsHash), getHashString(d.csHash)});
 
     QPair<uint32_t, uint32_t> last = AddDrawcalls(child, d.children);
     lastEID = last.first;
@@ -300,6 +330,12 @@ QPair<uint32_t, uint32_t> EventBrowser::AddDrawcalls(RDTreeWidgetItem *parent,
     {
       child->setText(COL_EID, QFormatStr("%1-%2").arg(d.eventId).arg(lastEID));
       child->setText(COL_DRAW, QFormatStr("%1-%2").arg(d.drawcallId).arg(lastDraw));
+      child->setText(COL_PS_HASH, getHashString(d.psHash));
+      child->setText(COL_VS_HASH, getHashString(d.vsHash));
+      child->setText(COL_GS_HASH, getHashString(d.gsHash));
+      child->setText(COL_HS_HASH, getHashString(d.hsHash));
+      child->setText(COL_DS_HASH, getHashString(d.dsHash));
+      child->setText(COL_CS_HASH, getHashString(d.csHash));
     }
 
     if(lastEID == 0)
@@ -1174,6 +1210,17 @@ void EventBrowser::ClearFindIcons()
     ClearFindIcons(ui->events->topLevelItem(0));
 }
 
+static bool matchesFilter(RDTreeWidgetItem *n, QString filter)
+{
+  return n->text(COL_NAME).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_PS_HASH).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_VS_HASH).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_GS_HASH).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_DS_HASH).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_HS_HASH).contains(filter, Qt::CaseInsensitive) ||
+         n->text(COL_CS_HASH).contains(filter, Qt::CaseInsensitive);
+}
+
 int EventBrowser::SetFindIcons(RDTreeWidgetItem *parent, QString filter)
 {
   int results = 0;
@@ -1182,7 +1229,7 @@ int EventBrowser::SetFindIcons(RDTreeWidgetItem *parent, QString filter)
   {
     RDTreeWidgetItem *n = parent->child(i);
 
-    if(n->text(COL_NAME).contains(filter, Qt::CaseInsensitive))
+    if(matchesFilter(n, filter))
     {
       EventItemTag tag = n->tag().value<EventItemTag>();
       tag.find = true;
@@ -1216,7 +1263,7 @@ RDTreeWidgetItem *EventBrowser::FindNode(RDTreeWidgetItem *parent, QString filte
 
     uint eid = n->tag().value<EventItemTag>().lastEID;
 
-    if(eid > after && n->text(COL_NAME).contains(filter, Qt::CaseInsensitive))
+    if(eid > after && matchesFilter(n, filter))
       return n;
 
     if(n->childCount() > 0)
@@ -1241,14 +1288,13 @@ int EventBrowser::FindEvent(RDTreeWidgetItem *parent, QString filter, uint32_t a
   {
     auto n = parent->child(i);
 
-    uint eid = n->tag().value<EventItemTag>().lastEID;
+    uint eid = n->tag().value<EventItemTag>().EID;
 
     bool matchesAfter = (forward && eid > after) || (!forward && eid < after);
 
     if(matchesAfter)
     {
-      QString name = n->text(COL_NAME);
-      if(name.contains(filter, Qt::CaseInsensitive))
+      if(matchesFilter(n, filter))
         return (int)eid;
     }
 

@@ -542,7 +542,7 @@ void DoSerialise(SerialiserType &ser, DrawcallDescription &el)
   SERIALISE_MEMBER(events);
   SERIALISE_MEMBER(children);
 
-  SIZE_CHECK(264);
+  SIZE_CHECK(288);
 }
 
 template <typename SerialiserType>
