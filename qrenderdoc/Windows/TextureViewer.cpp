@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  ******************************************************************************/
 
-#include "TextureViewer.h"
 #include <float.h>
 #include <math.h>
 #include <QClipboard>
@@ -42,6 +41,7 @@
 #include "Dialogs/TextureSaveDialog.h"
 #include "Widgets/ResourcePreview.h"
 #include "Widgets/TextureGoto.h"
+#include "TextureViewer.h"
 #include "ui_TextureViewer.h"
 
 float area(const QSizeF &s)
@@ -771,8 +771,10 @@ void TextureViewer::RT_UpdateVisualRange(IReplayController *)
     fmt.compCount = 4;
 
   bool channels[] = {
-      m_TexDisplay.red ? true : false, m_TexDisplay.green && fmt.compCount > 1,
-      m_TexDisplay.blue && fmt.compCount > 2, m_TexDisplay.alpha && fmt.compCount > 3,
+      m_TexDisplay.red ? true : false,
+      m_TexDisplay.green && fmt.compCount > 1,
+      m_TexDisplay.blue && fmt.compCount > 2,
+      m_TexDisplay.alpha && fmt.compCount > 3,
   };
 
   rdcarray<uint32_t> histogram = m_Output->GetHistogram(ui->rangeHistogram->rangeMin(),
@@ -3502,17 +3504,42 @@ void TextureViewer::on_saveTex_clicked()
     ANALYTIC_SET(Export.Texture, true);
 
     bool ret = false;
+
     QString fn = saveDialog.filename();
 
-    m_Ctx.Replay().BlockInvoke([this, &ret, fn](IReplayController *r) {
-      ret = r->SaveTexture(m_SaveConfig, fn.toUtf8().data());
-    });
-
-    if(!ret)
+    if(fn.contains(lit("%1")))
     {
-      RDDialog::critical(
-          NULL, tr("Error saving texture"),
-          tr("Error saving texture %1.\n\nCheck diagnostic log in Help menu for more details.").arg(fn));
+      DrawcallDescription const *draw = m_Ctx.GetDrawcall(m_Ctx.CurEvent());
+      int id = 0;
+      do
+      {
+        m_Ctx.SetEventID({this}, draw->eventId, draw->eventId);
+        QString rfn = fn.arg(QString::number(id));
+        m_Ctx.Replay().BlockInvoke([this, &ret, rfn](IReplayController *r) {
+          ret = r->SaveTexture(m_SaveConfig, rfn.toUtf8().data());
+        });
+        if(!ret)
+        {
+          RDDialog::critical(
+              NULL, tr("Error saving texture"),
+              tr("Error saving texture %1.\n\nCheck diagnostic log in Help menu for more details.")
+                  .arg(rfn));
+        }
+        id++;
+      } while(draw->next && draw->next->parent == draw->parent && (draw = draw->next));
+    }
+    else
+    {
+      m_Ctx.Replay().BlockInvoke([this, &ret, fn](IReplayController *r) {
+        ret = r->SaveTexture(m_SaveConfig, fn.toUtf8().data());
+      });
+      if(!ret)
+      {
+        RDDialog::critical(
+            NULL, tr("Error saving texture"),
+            tr("Error saving texture %1.\n\nCheck diagnostic log in Help menu for more details.")
+                .arg(saveDialog.filename()));
+      }
     }
   }
 }
@@ -3583,8 +3610,8 @@ void TextureViewer::on_pixelHistory_clicked()
 
   m_Ctx.AddDockWindow(hist->Widget(), DockReference::TransientPopupArea, this, 0.3f);
 
-  // we use this pointer to ensure that the history viewer is still visible (and hasn't been closed)
-  // by the time we want to set the results.
+  // we use this pointer to ensure that the history viewer is still visible (and hasn't been
+  // closed) by the time we want to set the results.
   QPointer<QWidget> histWidget = hist->Widget();
 
   // add a short delay so that controls repainting after a new panel appears can get at the

@@ -1153,6 +1153,33 @@ bool ReplayController::SaveTexture(const TextureSave &saveData, const char *path
     rowPitch = td.width * 3;
   }
 
+  /*if(sd.destType == FileType::JPG)
+  {
+    byte *rg0 = new byte[td.width / 2 * td.height / 2 * 3];
+
+    for(uint32_t y = 0; y < td.height / 2; y++)
+    {
+      for(uint32_t x = 0; x < td.width / 2; x++)
+      {
+        byte r = subdata[0][(y * 2 * td.width + x * 2) * 3 + 0];
+        byte g = subdata[0][(y * 2 * td.width + x * 2) * 3 + 1];
+        byte b = subdata[0][(y * 2 * td.width + x * 2) * 3 + 2];
+
+        rg0[(y * td.width / 2 + x) * 3 + 0] = r;
+        rg0[(y * td.width / 2 + x) * 3 + 1] = g;
+        rg0[(y * td.width / 2 + x) * 3 + 2] = b;
+      }
+    }
+
+    delete[] subdata[0];
+
+    subdata[0] = rg0;
+    td.width /= 2;
+    td.height /= 2;
+    numComps = 3;
+    rowPitch = td.width * 3;
+  }*/
+
   FILE *f = FileIO::fopen(path, "wb");
 
   if(!f)
