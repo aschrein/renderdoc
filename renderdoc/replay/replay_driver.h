@@ -99,6 +99,13 @@ public:
 
   virtual std::vector<ResourceId> GetTextures() = 0;
   virtual TextureDescription GetTexture(ResourceId id) = 0;
+  virtual void ToggleTexture(ResourceId id){};
+  virtual bool SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
+  {
+    return false;
+  }
+  virtual void RefreshReplacements(){}
+  virtual void ClearReplacements() {}
 
   virtual std::vector<DebugMessage> GetDebugMessages() = 0;
 

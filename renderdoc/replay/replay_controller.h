@@ -169,6 +169,15 @@ public:
   void RemoveReplacement(ResourceId id);
   void FreeTargetResource(ResourceId id);
 
+	void ToggleTexture(ResourceId id) { m_pDevice->ToggleTexture(id); };
+  virtual bool
+  SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
+  {
+    return m_pDevice->SetToggleTextureParams(firstVal, secondVal, step);
+  };
+  virtual void RefreshReplacements() { m_pDevice->RefreshReplacements(); }
+  virtual void ClearReplacements() { m_pDevice->ClearReplacements(); }
+
   FrameDescription GetFrameInfo();
   const SDFile &GetStructuredFile();
   const rdcarray<DrawcallDescription> &GetDrawcalls();

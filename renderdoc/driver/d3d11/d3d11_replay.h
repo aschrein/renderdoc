@@ -115,7 +115,10 @@ public:
 
   std::vector<ResourceId> GetTextures();
   TextureDescription GetTexture(ResourceId id);
-
+  void ToggleTexture(ResourceId id);
+  bool SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step);
+  virtual void RefreshReplacements();
+  virtual void ClearReplacements();
   std::vector<DebugMessage> GetDebugMessages();
 
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);

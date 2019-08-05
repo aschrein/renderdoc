@@ -69,6 +69,7 @@ class TrackedResource
 public:
   TrackedResource() { m_ID = ResourceIDGen::GetNewUniqueID(); }
   ResourceId GetResourceID() { return m_ID; }
+
 private:
   TrackedResource(const TrackedResource &);
   TrackedResource &operator=(const TrackedResource &);
@@ -347,6 +348,7 @@ protected:
 
   virtual void Shutdown() { WrappedDeviceChild11::Shutdown(); }
   virtual ~WrappedResource11() {}
+
 public:
   void ViewAddRef()
   {
@@ -766,6 +768,7 @@ protected:
   }
 
   virtual ~WrappedView1() {}
+
 public:
   ResourceId GetResourceResID() { return m_ResourceResID; }
   const ResourceRange &GetResourceRange() { return m_ResourceRange; }

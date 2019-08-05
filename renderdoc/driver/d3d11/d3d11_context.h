@@ -267,6 +267,12 @@ private:
   SERIALISED_ID3D11CONTEXT_MARKER_FUNCTIONS();
 
 public:
+	std::set<ResourceId> disabledResources;
+  std::map<ResourceId, ID3D11ShaderResourceView *> replacement_map;
+  unsigned first_val = 0, second_val = 0xffffffff, step = 32;
+  ID3D11ShaderResourceView *ReplaceOrUnwrap(ID3D11ShaderResourceView *in_srv);
+  void resetRemappings();
+
   static const int AllocPoolCount = 1024;
   static const int AllocPoolMaxByteSize = 3 * 1024 * 1024;
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D11DeviceContext, AllocPoolCount, AllocPoolMaxByteSize);

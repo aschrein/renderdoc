@@ -245,7 +245,7 @@ inline enum_name operator++(enum_name &a)                                      \
   typedef typename std::underlying_type<enum_name>::type etype;                \
   return a = enum_name(etype(a)+1);                                            \
 }
-// clang-format on
+  // clang-format on
 
 #endif
 
@@ -1328,6 +1328,13 @@ sample 0, etc.
 )");
   virtual bytebuf GetTextureData(ResourceId tex, uint32_t arrayIdx, uint32_t mip) = 0;
 
+  virtual void ToggleTexture(ResourceId id){};
+  virtual bool SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
+  {
+    return false;
+  };
+  virtual void RefreshReplacements() {}
+  virtual void ClearReplacements() {}
   static const uint32_t NoPreference = ~0U;
 
 protected:

@@ -539,6 +539,58 @@ TextureViewer::TextureViewer(ICaptureContext &ctx, QWidget *parent)
   QObject::connect(ui->rangeWhite, &RDLineEdit::leave, this, &TextureViewer::rangePoint_leave);
   QObject::connect(ui->rangeWhite, &RDLineEdit::keyPress, this, &TextureViewer::rangePoint_keyPress);
 
+	auto parseCheckerboardParams = [this] {
+    bool ok = false;
+    unsigned first_val = ui->first_val->text().toUInt(&ok, 16);
+    if(!ok)
+      return;
+    unsigned second_val = ui->second_val->text().toUInt(&ok, 16);
+    if(!ok)
+      return;
+    unsigned step = ui->step->text().toUInt(&ok, 10);
+    if(!ok)
+      return;
+    if(step == 0)
+      return;
+    //bool change = false;
+    if(m_Ctx.IsCaptureLoaded())
+    {
+			m_Ctx.Replay().AsyncInvoke([=](IReplayController *rc) {
+					rc->SetToggleTextureParams(first_val, second_val, step);
+			});
+			/*if(change)
+				m_Ctx.RefreshStatus();*/
+		}
+	};
+  ui->first_val->setText(tr("0x00000000"));
+  ui->second_val->setText(tr("0xffffffff"));
+  ui->step->setText(tr("32"));
+  QObject::connect(ui->first_val, &RDLineEdit::leave, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->first_val, &RDLineEdit::keyPress, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->first_val, &RDLineEdit::textChanged, [=] { parseCheckerboardParams(); });
+	QObject::connect(ui->second_val, &RDLineEdit::leave, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->second_val, &RDLineEdit::keyPress, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->second_val, &RDLineEdit::textChanged, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->step, &RDLineEdit::leave, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->step, &RDLineEdit::keyPress, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->step, &RDLineEdit::textChanged, [=] { parseCheckerboardParams(); });
+  QObject::connect(ui->rangeBlack, &RDLineEdit::keyPress, [&] {});
+  QObject::connect(ui->rangeWhite, &RDLineEdit::textChanged, [&] {});
+
+	QObject::connect(ui->resetReplacement, &RDToolButton::pressed, [=] {
+    if(m_Ctx.IsCaptureLoaded())
+    {
+      m_Ctx.Replay().BlockInvoke([&](IReplayController *rc) { rc->ClearReplacements(); });
+			m_Ctx.RefreshStatus();
+    }
+  });
+  QObject::connect(ui->refreshTextures, &RDToolButton::pressed, [=] {
+    if(m_Ctx.IsCaptureLoaded())
+    {
+      m_Ctx.Replay().BlockInvoke([&](IReplayController *rc) { rc->RefreshReplacements(); });
+      m_Ctx.RefreshStatus();
+    }
+  });
   for(RDToolButton *butt : {ui->channelRed, ui->channelGreen, ui->channelBlue, ui->channelAlpha})
   {
     QObject::connect(butt, &RDToolButton::toggled, this, &TextureViewer::channelsWidget_toggled);
@@ -619,6 +671,7 @@ TextureViewer::TextureViewer(ICaptureContext &ctx, QWidget *parent)
 
   flow2->addWidget(ui->zoomToolbar);
   flow2->addWidget(ui->overlayToolbar);
+  flow2->addWidget(ui->CheckerboardConfig);
   flow2->addWidget(ui->rangeToolbar);
 
   vertical->addWidget(flow1widget);
@@ -791,8 +844,10 @@ void TextureViewer::RT_UpdateVisualRange(IReplayController *)
     fmt.compCount = 4;
 
   bool channels[] = {
-      m_TexDisplay.red ? true : false, m_TexDisplay.green && fmt.compCount > 1,
-      m_TexDisplay.blue && fmt.compCount > 2, m_TexDisplay.alpha && fmt.compCount > 3,
+      m_TexDisplay.red ? true : false,
+      m_TexDisplay.green && fmt.compCount > 1,
+      m_TexDisplay.blue && fmt.compCount > 2,
+      m_TexDisplay.alpha && fmt.compCount > 3,
   };
 
   rdcarray<uint32_t> histogram = m_Output->GetHistogram(ui->rangeHistogram->rangeMin(),
@@ -1995,6 +2050,7 @@ void TextureViewer::OpenResourceContextMenu(ResourceId id, bool input,
 
   QAction showUnused(tr("Show Unused"), this);
   QAction showEmpty(tr("Show Empty"), this);
+  QAction toggleResource(tr("Toggle Resource"), this);
   QAction openLockedTab(tr("Open new Locked Tab"), this);
   QAction openResourceInspector(tr("Open in Resource Inspector"), this);
   QAction usageTitle(tr("Used:"), this);
@@ -2008,9 +2064,19 @@ void TextureViewer::OpenResourceContextMenu(ResourceId id, bool input,
 
   contextMenu.addAction(&showUnused);
   contextMenu.addAction(&showEmpty);
+  contextMenu.addAction(&toggleResource);
 
   QObject::connect(&showUnused, &QAction::triggered, this, &TextureViewer::showUnused_triggered);
   QObject::connect(&showEmpty, &QAction::triggered, this, &TextureViewer::showEmpty_triggered);
+  QObject::connect(&toggleResource, &QAction::triggered, [&] {
+    m_Ctx.Replay().AsyncInvoke([&](IReplayController *rc) {
+      TextureDescription *tex = m_Ctx.GetTexture(id);
+      if(tex && tex->dimension == 2)
+        rc->ToggleTexture(id);
+    });
+    if(m_Ctx.IsCaptureLoaded())
+      m_Ctx.RefreshStatus();
+  });
 
   if(m_Ctx.CurPipelineState().SupportsBarriers())
   {
@@ -3636,7 +3702,6 @@ void TextureViewer::on_debugPixelContext_clicked()
     }
 
     done = true;
-
   });
 
   QString debugContext = tr("Pixel %1,%2").arg(x).arg(y);

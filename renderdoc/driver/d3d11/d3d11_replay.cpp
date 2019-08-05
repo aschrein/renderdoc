@@ -251,6 +251,58 @@ void D3D11Replay::DestroyResources()
   SAFE_RELEASE(m_pFactory);
 }
 
+void D3D11Replay::ToggleTexture(ResourceId id)
+{
+  /*auto pRes = m_pDevice->GetResourceManager()->GetCurrentResource(id);
+  ID3D11ShaderResourceView *view = nullptr;
+  if(pRes->QueryInterface(&view) == S_OK)
+  {
+    id = ((WrappedID3D11ShaderResourceView1*)view)->GetResourceResID();
+  }*/
+  // id = m_pDevice->GetResourceManager()->GetLiveID(id);
+  if(m_pImmediateContext->disabledResources.find(id) != m_pImmediateContext->disabledResources.end())
+    m_pImmediateContext->disabledResources.erase(id);
+  else
+    m_pImmediateContext->disabledResources.insert(id);
+  // auto it2D = WrappedID3D11Texture2D1::m_TextureList.find(id);
+
+  // if(it2D != WrappedID3D11Texture2D1::m_TextureList.end())
+  // {
+  //   WrappedID3D11Texture2D1 *wrap = (WrappedID3D11Texture2D1 *)it2D->second.m_Texture;
+  //   if(wrap->GetPretendZero())
+  //     wrap->SetPretendZero(false);
+  //   else
+  //		wrap->SetPretendZero(true);
+
+  //   return;
+  // }
+  // // Implement other textures
+  // RDCASSERT(false);
+}
+
+bool D3D11Replay::SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
+{
+  bool change = m_pImmediateContext->first_val != firstVal ||
+  m_pImmediateContext->second_val != secondVal ||
+  m_pImmediateContext->step != step;
+  m_pImmediateContext->first_val = firstVal;
+  m_pImmediateContext->second_val = secondVal;
+  m_pImmediateContext->step = step;
+  //if(change)
+  //  m_pImmediateContext->resetRemappings();
+  return change;
+}
+
+void D3D11Replay::RefreshReplacements()
+{
+  m_pImmediateContext->replacement_map.clear();
+}
+void D3D11Replay::ClearReplacements()
+{
+  m_pImmediateContext->disabledResources.clear();
+  m_pImmediateContext->replacement_map.clear();
+}
+
 TextureDescription D3D11Replay::GetTexture(ResourceId id)
 {
   TextureDescription tex = {};

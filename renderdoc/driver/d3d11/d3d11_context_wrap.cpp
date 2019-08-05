@@ -2737,6 +2737,137 @@ void WrappedID3D11DeviceContext::PSSetConstantBuffers(UINT StartSlot, UINT NumBu
   VerifyState();
 }
 
+void WrappedID3D11DeviceContext::resetRemappings()
+{
+  replacement_map.clear();
+}
+
+ID3D11ShaderResourceView *WrappedID3D11DeviceContext::ReplaceOrUnwrap(ID3D11ShaderResourceView *in_srv)
+{
+  auto wrap = (WrappedID3D11ShaderResourceView1 *)in_srv;
+  if(wrap)
+  {
+    ResourceId id = m_pDevice->GetResourceManager()->GetOriginalID(wrap->GetResourceResID());
+
+    if(this->disabledResources.find(id) != this->disabledResources.end())
+    {
+      if(replacement_map.find(id) != replacement_map.end())
+      {
+        auto srv = replacement_map.find(id)->second;
+        ID3D11Device *pDevice;
+        this->GetReal()->GetDevice(&pDevice);
+        ID3D11Device *pDevice1;
+        srv->GetDevice(&pDevice1);
+        if(pDevice != pDevice1)
+          replacement_map.erase(id);
+        pDevice->Release();
+        pDevice1->Release();
+      }
+      if(replacement_map.find(id) == replacement_map.end())
+      {
+        WrappedID3D11Texture2D1 *tex = nullptr;
+        ID3D11Device *pDevice;
+        this->GetReal()->GetDevice(&pDevice);
+        ID3D11Resource *res;
+        wrap->GetResource(&res);
+        tex = (WrappedID3D11Texture2D1 *)res;
+        // auto RealRes = tex->GetReal();
+        D3D11_TEXTURE2D_DESC stageDesc;
+        tex->GetDesc(&stageDesc);
+        if(    // stageDesc.MipLevels == 1 &&
+               // stageDesc.ArraySize == 1 &&
+            (stageDesc.Format == DXGI_FORMAT_R32_UINT ||
+             stageDesc.Format == DXGI_FORMAT_R32_TYPELESS || stageDesc.Format == DXGI_FORMAT_R8_UNORM ||
+             stageDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+             stageDesc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
+             stageDesc.Format == DXGI_FORMAT_BC7_UNORM_SRGB))
+        {
+          auto oldFormat = stageDesc.Format;
+          if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
+            stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+          if(oldFormat == DXGI_FORMAT_R32_TYPELESS)
+            stageDesc.Format = DXGI_FORMAT_R32_FLOAT;
+          if(oldFormat == DXGI_FORMAT_R8_UNORM || oldFormat == DXGI_FORMAT_R11G11B10_FLOAT)
+            stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+          stageDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+          ID3D11Texture2D *stagingTex = NULL;
+          ID3D11Texture2D *proxy = NULL;
+          stageDesc.Usage = D3D11_USAGE_DEFAULT;
+          RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &proxy)));
+          ID3D11ShaderResourceView *srv;
+          {
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+
+            srvDesc.Format = stageDesc.Format;
+            if(stageDesc.ArraySize > 1)
+            {
+              srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+              srvDesc.Texture2DArray.ArraySize = stageDesc.ArraySize;
+              srvDesc.Texture2DArray.FirstArraySlice = 0;
+              srvDesc.Texture2DArray.MipLevels = stageDesc.MipLevels;
+              srvDesc.Texture2DArray.MostDetailedMip = 0;
+            }
+            else
+            {
+              srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+              srvDesc.Texture2D.MipLevels = stageDesc.MipLevels;
+              srvDesc.Texture2D.MostDetailedMip = 0;
+            }
+
+            RDCASSERT(SUCCEEDED(pDevice->CreateShaderResourceView(proxy, &srvDesc, &srv)));
+          }
+          stageDesc.MiscFlags = 0;
+          stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+          stageDesc.BindFlags = 0;
+          stageDesc.Usage = D3D11_USAGE_STAGING;
+
+          RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &stagingTex)));
+          D3D11_MAPPED_SUBRESOURCE mappedRes{};
+          for(unsigned mip = 0; mip < stageDesc.MipLevels * stageDesc.ArraySize; mip++)
+          {
+            RDCASSERT(
+                SUCCEEDED(this->GetReal()->Map(stagingTex, mip, D3D11_MAP_WRITE, 0, &mappedRes)));
+            auto pitch = GetResourcePitchForSubresource(this->GetReal(), stagingTex, mip);
+
+            // if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
+            {
+              unsigned *typed_data = (unsigned *)mappedRes.pData;
+              for(unsigned y = 0; y < (stageDesc.Height >> (mip % stageDesc.MipLevels)); y++)
+              {
+                for(unsigned x = 0; x < (stageDesc.Width >> (mip % stageDesc.MipLevels)); x++)
+                {
+                  typed_data[x + y * pitch.m_RowPitch / 4] =
+                      (((x / step) & 1) ^ ((y / step) & 1)) == 0 ? first_val : second_val;
+                }
+              }
+            }
+            /* else
+               memset((void *)mappedRes.pData, -1, (pitch.m_RowPitch * stageDesc.Height));*/
+            this->GetReal()->Unmap(stagingTex, mip);
+          }
+          this->GetReal()->CopyResource(proxy, stagingTex);
+          replacement_map.insert({id, srv});
+          stagingTex->Release();
+          // proxy->Release();
+        }
+        // RealRes->Release();
+        pDevice->Release();
+        tex->Release();
+      }
+      if(replacement_map.find(id) != replacement_map.end())
+        return replacement_map.find(id)->second;
+    }
+    else
+    {
+      if(replacement_map.find(id) != replacement_map.end())
+        replacement_map.erase(id);
+    }
+  }
+  return UNWRAP(WrappedID3D11ShaderResourceView1, in_srv);
+}
+
 template <typename SerialiserType>
 bool WrappedID3D11DeviceContext::Serialise_PSSetShaderResources(
     SerialiserType &ser, UINT StartSlot, UINT NumViews,
@@ -2758,8 +2889,9 @@ bool WrappedID3D11DeviceContext::Serialise_PSSetShaderResources(
 
     ID3D11ShaderResourceView *SRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
     for(UINT i = 0; i < NumViews; i++)
-      SRVs[i] = UNWRAP(WrappedID3D11ShaderResourceView1, ppShaderResourceViews[i]);
-
+    {
+      SRVs[i] = ReplaceOrUnwrap(ppShaderResourceViews[i]);
+    }
     m_pRealContext->PSSetShaderResources(StartSlot, NumViews, SRVs);
     VerifyState();
   }
@@ -4649,7 +4781,7 @@ bool WrappedID3D11DeviceContext::Serialise_CSSetShaderResources(
 
     ID3D11ShaderResourceView *SRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
     for(UINT i = 0; i < NumViews; i++)
-      SRVs[i] = UNWRAP(WrappedID3D11ShaderResourceView1, ppShaderResourceViews[i]);
+      SRVs[i] = ReplaceOrUnwrap(ppShaderResourceViews[i]);
 
     m_pRealContext->CSSetShaderResources(StartSlot, NumViews, SRVs);
     VerifyState();
