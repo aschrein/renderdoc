@@ -260,7 +260,7 @@ namespace ResourceIDGen
 {
 // the only function allowed access to ResourceId internals, for allocating a new ID
 ResourceId GetNewUniqueID();
-};
+};    // namespace ResourceIDGen
 #endif
 
 // We give every resource a globally unique ID so that we can differentiate
@@ -1327,7 +1327,7 @@ sample 0, etc.
 :rtype: ``bytes``
 )");
   virtual bytebuf GetTextureData(ResourceId tex, uint32_t arrayIdx, uint32_t mip) = 0;
-
+  // Texture replacement
   virtual void ToggleTexture(ResourceId id){};
   virtual bool SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
   {
@@ -1335,6 +1335,13 @@ sample 0, etc.
   };
   virtual void RefreshReplacements() {}
   virtual void ClearReplacements() {}
+  // Sphere injection
+	virtual int32_t CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle) { return -1; }
+	virtual void PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count) {}
+	virtual void ClearSpheres() {}
+	virtual int32_t CreateComputeSet(char const *filename, int32_t old_handle) { return -1; }
+	virtual void PutDispatch(int32_t set_handle, uint32_t eid, uint32_t count_x, uint32_t count_y, uint32_t count_z) {}
+  //
   static const uint32_t NoPreference = ~0U;
 
 protected:

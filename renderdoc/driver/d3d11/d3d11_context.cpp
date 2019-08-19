@@ -1161,7 +1161,6 @@ ReplayStatus WrappedID3D11DeviceContext::ReplayLog(CaptureState readType, uint32
   }
 
   uint64_t startOffset = ser.GetReader()->GetOffset();
-
   for(;;)
   {
     if(IsActiveReplaying(m_State) && m_CurEventID > endEventID)
@@ -1171,6 +1170,15 @@ ReplayStatus WrappedID3D11DeviceContext::ReplayLog(CaptureState readType, uint32
       // we can just break out if we've done all the events desired.
       break;
     }
+
+		if (sphere_injections.find(m_CurEventID) != sphere_injections.end())
+		{
+			auto data = sphere_injections.find(m_CurEventID);
+			draw_spheres(data->second.first, data->second.second);
+		}
+
+		/*if (m_CurEventID == endEventID - 15)
+			replace_textures = true;*/
 
     m_CurChunkOffset = ser.GetReader()->GetOffset();
 
@@ -1187,6 +1195,12 @@ ReplayStatus WrappedID3D11DeviceContext::ReplayLog(CaptureState readType, uint32
 
     if(ser.GetReader()->IsErrored())
       return ReplayStatus::APIDataCorrupted;
+
+		if (compute_injections.find(m_CurEventID) != compute_injections.end())
+		{
+			auto data = compute_injections.find(m_CurEventID);
+			InjectDispatch(m_CurEventID, data->second);
+		}
 
     // if there wasn't a serialisation error, but the chunk didn't succeed, then it's an API replay
     // failure.

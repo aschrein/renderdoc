@@ -169,6 +169,7 @@ public:
   void RemoveReplacement(ResourceId id);
   void FreeTargetResource(ResourceId id);
 
+	// Texture replacement
 	void ToggleTexture(ResourceId id) { m_pDevice->ToggleTexture(id); };
   virtual bool
   SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step)
@@ -177,6 +178,20 @@ public:
   };
   virtual void RefreshReplacements() { m_pDevice->RefreshReplacements(); }
   virtual void ClearReplacements() { m_pDevice->ClearReplacements(); }
+	// Sphere injection
+  virtual int32_t CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle) { return m_pDevice->CreateShaderSet(vs_filename, ps_filename, old_handle); }
+	virtual void PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count) { m_pDevice->PutSpheres(set_handle, eid, count); }
+	virtual void ClearSpheres() { m_pDevice->ClearSpheres(); }
+	// Dispatch injection
+	virtual int32_t CreateComputeSet(char const *filename, int32_t old_handle) {return m_pDevice->CreateComputeSet(filename, old_handle);}
+	virtual void PutDispatch(int32_t set_handle, uint32_t eid, uint32_t count_x, uint32_t count_y, uint32_t count_z)
+	{
+		m_pDevice->PutDispatch(	set_handle,
+														eid, count_x, count_y,
+														count_z);
+	}
+	//
+
 
   FrameDescription GetFrameInfo();
   const SDFile &GetStructuredFile();

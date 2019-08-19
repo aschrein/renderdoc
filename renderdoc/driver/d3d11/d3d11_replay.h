@@ -115,10 +115,20 @@ public:
 
   std::vector<ResourceId> GetTextures();
   TextureDescription GetTexture(ResourceId id);
+
+	//
   void ToggleTexture(ResourceId id);
   bool SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, uint32_t step);
   virtual void RefreshReplacements();
   virtual void ClearReplacements();
+	// Sphere injection
+	virtual int32_t CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle);
+	virtual void PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count);
+	void ClearSpheres();
+  // Dispatch injection
+	virtual int32_t CreateComputeSet(char const *filename, int32_t old_handle);
+	virtual void PutDispatch(int32_t set_handle, uint32_t eid, uint32_t count_x, uint32_t count_y, uint32_t count_z);
+	//
   std::vector<DebugMessage> GetDebugMessages();
 
   rdcarray<ShaderEntryPoint> GetShaderEntryPoints(ResourceId shader);

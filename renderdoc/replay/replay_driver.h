@@ -106,6 +106,14 @@ public:
   }
   virtual void RefreshReplacements(){}
   virtual void ClearReplacements() {}
+	// Sphere injection
+	virtual int32_t CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle) { return -1; }
+	virtual void PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count) {}
+	virtual void ClearSpheres() {}
+	// Dispatch injection
+	virtual int32_t CreateComputeSet(char const *filename, int32_t old_handle) { return -1; }
+	virtual void PutDispatch(int32_t set_handle, uint32_t eid, uint32_t count_x, uint32_t count_y, uint32_t count_z) {}
+  //
 
   virtual std::vector<DebugMessage> GetDebugMessages() = 0;
 

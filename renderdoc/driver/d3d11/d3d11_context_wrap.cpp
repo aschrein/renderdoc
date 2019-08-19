@@ -30,6 +30,9 @@
 #include "d3d11_debug.h"
 #include "d3d11_renderstate.h"
 #include "d3d11_resources.h"
+#include "glm/glm.hpp"
+#include "../driver/dx/official/d3dcompiler.h"
+#include <fstream>
 
 #ifndef DXGI_ERROR_INVALID_CALL
 #define DXGI_ERROR_INVALID_CALL MAKE_DXGI_HRESULT(1)
@@ -2739,13 +2742,382 @@ void WrappedID3D11DeviceContext::PSSetConstantBuffers(UINT StartSlot, UINT NumBu
 
 void WrappedID3D11DeviceContext::resetRemappings()
 {
+	for (auto &item : replacement_map)
+		item.second->Release();
   replacement_map.clear();
+}
+
+struct u16_face {
+	uint16_t arr[3];
+	uint16_t operator[](size_t i) const { return arr[i]; }
+	uint16_t &operator[](size_t i) { return arr[i]; }
+};
+
+struct Raw_Mesh_3p16i {
+	std::vector<glm::vec3> positions;
+	std::vector<u16_face> indices;
+};
+using uint = unsigned;
+static Raw_Mesh_3p16i subdivide_icosahedron(uint32_t level) {
+	Raw_Mesh_3p16i out;
+	static float const X = 0.5257311f;
+	static float const Z = 0.8506508f;
+	static glm::vec3 const g_icosahedron_positions[12] = {
+			{-X, 0.0, Z}, {X, 0.0, Z},  {-X, 0.0, -Z}, {X, 0.0, -Z},
+			{0.0, Z, X},  {0.0, Z, -X}, {0.0, -Z, X},  {0.0, -Z, -X},
+			{Z, X, 0.0},  {-Z, X, 0.0}, {Z, -X, 0.0},  {-Z, -X, 0.0} };
+	static u16_face const g_icosahedron_indices[20] = {
+			{1, 4, 0},  {4, 9, 0},  {4, 5, 9},  {8, 5, 4},  {1, 8, 4},
+			{1, 10, 8}, {10, 3, 8}, {8, 3, 5},  {3, 2, 5},  {3, 7, 2},
+			{3, 10, 7}, {10, 6, 7}, {6, 11, 7}, {6, 0, 11}, {6, 1, 0},
+			{10, 1, 6}, {11, 0, 9}, {2, 11, 9}, {5, 2, 9},  {11, 2, 7} };
+	for (auto p : g_icosahedron_positions) {
+		out.positions.push_back(p);
+	}
+	for (auto i : g_icosahedron_indices) {
+		out.indices.push_back(i);
+	}
+	auto subdivide = [](Raw_Mesh_3p16i const &in) {
+		Raw_Mesh_3p16i out;
+		std::map<std::pair<uint16_t, uint16_t>, uint16_t> lookup;
+
+		auto get_or_insert = [&](uint16_t i0, uint16_t i1) {
+			std::pair<uint16_t, uint16_t> key(i0, i1);
+			if (key.first > key.second)
+				std::swap(key.first, key.second);
+
+			auto inserted = lookup.insert({ key, uint16_t(out.positions.size()) });
+
+			if (inserted.second) {
+				auto v0_x = out.positions[i0].x;
+				auto v1_x = out.positions[i1].x;
+				auto v0_y = out.positions[i0].y;
+				auto v1_y = out.positions[i1].y;
+				auto v0_z = out.positions[i0].z;
+				auto v1_z = out.positions[i1].z;
+
+				auto mid_point = glm::vec3{ (v0_x + v1_x) / 2.0f, (v0_y + v1_y) / 2.0f,
+															(v0_z + v1_z) / 2.0f };
+				auto add_vertex = [&](glm::vec3 p) {
+					float length = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+					out.positions.push_back(
+						glm::vec3{ p.x / length, p.y / length, p.z / length });
+				};
+				add_vertex(mid_point);
+			}
+
+			return inserted.first->second;
+		};
+		out.positions = in.positions;
+		for (auto &face : in.indices) {
+			u16_face mid;
+
+			for (size_t edge = 0; edge < 3; ++edge) {
+				mid[edge] = get_or_insert(face[edge], face[(edge + 1) % 3]);
+			}
+
+			out.indices.push_back(u16_face{ face[0], mid[0], mid[2] });
+			out.indices.push_back(u16_face{ face[1], mid[1], mid[0] });
+			out.indices.push_back(u16_face{ face[2], mid[2], mid[1] });
+			out.indices.push_back(u16_face{ mid[0], mid[1], mid[2] });
+		}
+		return out;
+	};
+	for (uint i = 0; i < level; i++) {
+		out = subdivide(out);
+	}
+	return out;
+}
+
+static std::vector<char> load_text(char const *source_name) {
+	std::ifstream is(source_name,
+		std::ios::binary | std::ios::in | std::ios::ate);
+
+	if (!is.is_open())
+		return {};
+	size_t size = is.tellg();
+	is.seekg(0, std::ios::beg);
+	std::vector<char> shader_text_buf(size);
+	is.read(&shader_text_buf[0], size);
+	std::string shader_text(shader_text_buf.begin(), shader_text_buf.end());
+	is.close();
+	return shader_text_buf;
+}
+
+#define ASSERT_SOK(x) if (!SUCCEEDED((x))) {std::abort();}
+
+static ID3D11PixelShader *load_ps(ID3D11Device *pDevice,
+	char const *filename,
+	char const *entry)
+{
+	ID3D11PixelShader *out;
+	auto text = load_text(filename);
+	if (text.empty())
+		return nullptr;
+	ID3DBlob *pBlob = nullptr;
+	ID3DBlob *pError = nullptr;
+	auto hr = D3DCompile(&text[0], text.size(), NULL, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+		entry, "ps_5_0", 0, 0, &pBlob, &pError);
+	if (FAILED(hr))
+	{
+		if (pBlob)
+			pBlob->Release();
+		if (pError)
+		{
+			OutputDebugStringA((char*)pError->GetBufferPointer());
+			pError->Release();
+		}
+		return nullptr;
+	}
+	ASSERT_SOK(pDevice->CreatePixelShader((DWORD*)pBlob->GetBufferPointer(), pBlob->GetBufferSize(), NULL, &out));
+	pBlob->Release();
+	return out;
+}
+
+void WrappedID3D11DeviceContext::draw_spheres(int32_t set, uint32_t count) {
+	if (set < 0)
+		return;
+	ID3D11Device *pDevice = this->m_pDevice->GetReal();
+	ID3D11DeviceContext *ctx = this->GetReal();
+	if (!sphere_wrapper.index_buffer) {
+		auto mesh = subdivide_icosahedron(4);
+		sphere_wrapper.index_count = uint32_t(mesh.indices.size()) * 3;
+		{
+			D3D11_BUFFER_DESC desc{};
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.ByteWidth = uint32_t(mesh.positions.size()) * sizeof(glm::vec3);
+			desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+			D3D11_SUBRESOURCE_DATA data{};
+			data.pSysMem = &mesh.positions[0];
+			data.SysMemPitch = uint32_t(mesh.positions.size() * sizeof(glm::vec3));
+			ASSERT_SOK(pDevice->CreateBuffer(&desc, &data, &sphere_wrapper.vertex_buffer));
+		}
+		{
+			D3D11_BUFFER_DESC desc{};
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.ByteWidth = uint32_t(mesh.indices.size()) * sizeof(u16_face);
+			desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+			D3D11_SUBRESOURCE_DATA data{};
+			data.pSysMem = &mesh.indices[0];
+			data.SysMemPitch = uint32_t(mesh.indices.size() * sizeof(u16_face));
+			ASSERT_SOK(pDevice->CreateBuffer(&desc, &data, &sphere_wrapper.index_buffer));
+		}
+	}
+	// copy-pasta from ImGui
+	struct BACKUP_DX11_STATE
+	{
+		UINT                        ScissorRectsCount, ViewportsCount;
+		D3D11_RECT                  ScissorRects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+		D3D11_VIEWPORT              Viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+		ID3D11RasterizerState*      RS;
+		ID3D11BlendState*           BlendState;
+		FLOAT                       BlendFactor[4];
+		UINT                        SampleMask;
+		UINT                        StencilRef;
+		ID3D11DepthStencilState*    DepthStencilState;
+		ID3D11ShaderResourceView*   PSShaderResource;
+		ID3D11SamplerState*         PSSampler;
+		ID3D11PixelShader*          PS;
+		ID3D11VertexShader*         VS;
+		UINT                        PSInstancesCount, VSInstancesCount;
+		ID3D11ClassInstance*        PSInstances[256], *VSInstances[256];   // 256 is max according to PSSetShader documentation
+		D3D11_PRIMITIVE_TOPOLOGY    PrimitiveTopology;
+		ID3D11Buffer*               IndexBuffer, *VertexBuffer, *VSConstantBuffer;
+		UINT                        IndexBufferOffset, VertexBufferStride, VertexBufferOffset;
+		DXGI_FORMAT                 IndexBufferFormat;
+		ID3D11InputLayout*          InputLayout;
+	};
+#if 1
+	BACKUP_DX11_STATE old;
+	/*old.ScissorRectsCount = old.ViewportsCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	ctx->RSGetScissorRects(&old.ScissorRectsCount, old.ScissorRects);
+	ctx->RSGetViewports(&old.ViewportsCount, old.Viewports);
+	ctx->RSGetState(&old.RS);
+	ctx->OMGetBlendState(&old.BlendState, old.BlendFactor, &old.SampleMask);
+	ctx->OMGetDepthStencilState(&old.DepthStencilState, &old.StencilRef);
+	ctx->PSGetShaderResources(0, 1, &old.PSShaderResource);
+	ctx->PSGetSamplers(0, 1, &old.PSSampler);*/
+	old.PSInstancesCount = old.VSInstancesCount = 256;
+	ctx->PSGetShader(&old.PS, old.PSInstances, &old.PSInstancesCount);
+	ctx->VSGetShader(&old.VS, old.VSInstances, &old.VSInstancesCount);
+	//ctx->VSGetConstantBuffers(0, 1, &old.VSConstantBuffer);
+	ctx->IAGetPrimitiveTopology(&old.PrimitiveTopology);
+	ctx->IAGetIndexBuffer(&old.IndexBuffer, &old.IndexBufferFormat, &old.IndexBufferOffset);
+	ctx->IAGetVertexBuffers(0, 1, &old.VertexBuffer, &old.VertexBufferStride, &old.VertexBufferOffset);
+	ctx->IAGetInputLayout(&old.InputLayout);
+
+	{
+		auto shader_set = shader_sets[set];
+		ctx->IASetInputLayout(shader_set.input_layout);
+		ctx->IASetIndexBuffer(sphere_wrapper.index_buffer, DXGI_FORMAT_R16_UINT, 0);
+		UINT strides[] = { 12 };
+		UINT offsets[] = { 0 };
+		ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		ctx->IASetVertexBuffers(0, 1, &sphere_wrapper.vertex_buffer, strides, offsets);
+		ctx->VSSetShader(shader_set.vs, nullptr, 0);
+		ctx->PSSetShader(shader_set.ps, nullptr, 0);
+		ctx->DrawIndexedInstanced(sphere_wrapper.index_count, count, 0, 0, 0);
+	}
+
+	// Restore state
+	/*ctx->RSSetScissorRects(old.ScissorRectsCount, old.ScissorRects);
+	ctx->RSSetViewports(old.ViewportsCount, old.Viewports);
+	ctx->RSSetState(old.RS); if (old.RS) old.RS->Release();
+	ctx->OMSetBlendState(old.BlendState, old.BlendFactor, old.SampleMask); if (old.BlendState) old.BlendState->Release();
+	ctx->OMSetDepthStencilState(old.DepthStencilState, old.StencilRef); if (old.DepthStencilState) old.DepthStencilState->Release();
+	ctx->PSSetShaderResources(0, 1, &old.PSShaderResource); if (old.PSShaderResource) old.PSShaderResource->Release();
+	ctx->PSSetSamplers(0, 1, &old.PSSampler); if (old.PSSampler) old.PSSampler->Release();*/
+	ctx->PSSetShader(old.PS, old.PSInstances, old.PSInstancesCount); if (old.PS) old.PS->Release();
+	for (UINT i = 0; i < old.PSInstancesCount; i++) if (old.PSInstances[i]) old.PSInstances[i]->Release();
+	ctx->VSSetShader(old.VS, old.VSInstances, old.VSInstancesCount); if (old.VS) old.VS->Release();
+	//ctx->VSSetConstantBuffers(0, 1, &old.VSConstantBuffer); if (old.VSConstantBuffer) old.VSConstantBuffer->Release();
+	for (UINT i = 0; i < old.VSInstancesCount; i++) if (old.VSInstances[i]) old.VSInstances[i]->Release();
+	ctx->IASetPrimitiveTopology(old.PrimitiveTopology);
+	ctx->IASetIndexBuffer(old.IndexBuffer, old.IndexBufferFormat, old.IndexBufferOffset); if (old.IndexBuffer) old.IndexBuffer->Release();
+	ctx->IASetVertexBuffers(0, 1, &old.VertexBuffer, &old.VertexBufferStride, &old.VertexBufferOffset); if (old.VertexBuffer) old.VertexBuffer->Release();
+	ctx->IASetInputLayout(old.InputLayout); if (old.InputLayout) old.InputLayout->Release();
+#endif // 1
+
+}
+
+int32_t WrappedID3D11DeviceContext::CreateShaderSet(
+	char const *vs_filename,
+	char const *ps_filename, int32_t old_handle)
+{
+	ID3D11Device *pDevice = this->m_pDevice->GetReal();
+	auto ps = load_ps(pDevice, ps_filename, "main");
+	if (!ps)
+		return -1;
+	ID3D11VertexShader *vs = nullptr;
+	ID3D11InputLayout *input_layout;
+
+	{
+		auto text = load_text(vs_filename);
+		if (text.empty())
+		{
+			if (ps)
+				ps->Release();
+			return -1;
+		}
+		ID3DBlob *pBlob = nullptr;
+		ID3DBlob *pError = nullptr;
+		auto hr = D3DCompile(&text[0], text.size(), NULL, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			"main", "vs_5_0", 0, 0, &pBlob, &pError);
+		if (FAILED(hr))
+		{
+			if (pBlob)
+				pBlob->Release();
+			if (pError)
+			{
+				OutputDebugStringA((char*)pError->GetBufferPointer());
+				pError->Release();
+			}
+			if (ps)
+				ps->Release();
+			return -1;
+		}
+		ASSERT_SOK(pDevice->CreateVertexShader((DWORD*)pBlob->GetBufferPointer(), pBlob->GetBufferSize(), NULL, &vs));
+		D3D11_INPUT_ELEMENT_DESC ied[] =
+		{
+			{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		};
+
+		ASSERT_SOK(pDevice->CreateInputLayout(ied, ARRAYSIZE(ied), (DWORD*)pBlob->GetBufferPointer(), pBlob->GetBufferSize(), &input_layout));
+		pBlob->Release();
+	}
+	if (old_handle >= 0 && shader_sets.size() > old_handle)
+	{
+		shader_sets[old_handle].input_layout->Release();
+		shader_sets[old_handle].vs->Release();
+		shader_sets[old_handle].ps->Release();
+		shader_sets[old_handle].input_layout = input_layout;
+		shader_sets[old_handle].vs = vs;
+		shader_sets[old_handle].ps = ps;
+		return old_handle;
+	}
+	shader_sets.push_back(ShaderSet{ vs, ps, input_layout });
+	return int32_t(shader_sets.size()) - 1;
+}
+void WrappedID3D11DeviceContext::PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count)
+{
+	sphere_injections[eid] = {set_handle, count};
+}
+
+// Dispatch injection
+int32_t WrappedID3D11DeviceContext::CreateComputeSet(char const *filename, int32_t old_handle)
+{
+	ID3D11ComputeShader *cs = nullptr;
+	{
+		auto text = load_text(filename);
+		if (text.empty())
+		{
+			OutputDebugStringA(filename);
+			return -1;
+		}
+		ID3DBlob *pBlob = nullptr;
+		ID3DBlob *pError = nullptr;
+		auto hr = D3DCompile(&text[0], text.size(), NULL, NULL, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+			"main", "cs_5_0", 0, 0, &pBlob, &pError);
+		if (FAILED(hr))
+		{
+			if (pBlob)
+				pBlob->Release();
+			if (pError)
+			{
+				OutputDebugStringA((char*)pError->GetBufferPointer());
+				pError->Release();
+			}
+			return -1;
+		}
+		ID3D11Device *pDevice = this->m_pDevice->GetReal();
+		ASSERT_SOK(pDevice->CreateComputeShader((DWORD*)pBlob->GetBufferPointer(), pBlob->GetBufferSize(), NULL, &cs));
+	}
+	if (old_handle >= 0 && compute_sets.size() > old_handle)
+	{
+		compute_sets[old_handle]->Release();
+		compute_sets[old_handle] = cs;
+		return old_handle;
+	}
+	compute_sets.push_back(cs);
+	return int32_t(compute_sets.size()) - 1;
+}
+void WrappedID3D11DeviceContext::PutDispatch(
+	int32_t set_handle,
+	uint32_t eid, uint32_t count_x, uint32_t count_y,
+	uint32_t count_z)
+{
+	compute_injections[eid] = { set_handle, count_x, count_y, count_z };
+}
+void WrappedID3D11DeviceContext::InjectDispatch(uint32_t eid, DispatchParams params)
+{
+	if (params.set_id < 0)
+		return;
+	ID3D11DeviceContext *ctx = this->GetReal();
+	// copy-pasta from ImGui
+	struct BACKUP_DX11_STATE
+	{
+		ID3D11ComputeShader*							CS;
+		UINT                        CSInstancesCount;
+		ID3D11ClassInstance*        CSInstances[256];   // 256 is max according to PSSetShader documentation
+
+	};
+	BACKUP_DX11_STATE old;
+	old.CSInstancesCount = 256;
+	ctx->CSGetShader(&old.CS, old.CSInstances, &old.CSInstancesCount);
+
+	{
+		auto cs = compute_sets[params.set_id];
+		ctx->CSSetShader(cs, nullptr, 0);
+		ctx->Dispatch(params.x, params.y, params.z);
+	}
+	ctx->CSSetShader(old.CS, old.CSInstances, old.CSInstancesCount); if (old.CS) old.CS->Release();
+	for (UINT i = 0; i < old.CSInstancesCount; i++) if (old.CSInstances[i]) old.CSInstances[i]->Release();
 }
 
 ID3D11ShaderResourceView *WrappedID3D11DeviceContext::ReplaceOrUnwrap(ID3D11ShaderResourceView *in_srv)
 {
   auto wrap = (WrappedID3D11ShaderResourceView1 *)in_srv;
-  if(wrap)
+  if(replace_textures && wrap && wrap->GetResourceResID() != ResourceId::Null())
   {
     ResourceId id = m_pDevice->GetResourceManager()->GetOriginalID(wrap->GetResourceResID());
 
@@ -2763,99 +3135,277 @@ ID3D11ShaderResourceView *WrappedID3D11DeviceContext::ReplaceOrUnwrap(ID3D11Shad
         pDevice->Release();
         pDevice1->Release();
       }
-      if(replacement_map.find(id) == replacement_map.end())
-      {
-        WrappedID3D11Texture2D1 *tex = nullptr;
-        ID3D11Device *pDevice;
-        this->GetReal()->GetDevice(&pDevice);
-        ID3D11Resource *res;
-        wrap->GetResource(&res);
-        tex = (WrappedID3D11Texture2D1 *)res;
-        // auto RealRes = tex->GetReal();
-        D3D11_TEXTURE2D_DESC stageDesc;
-        tex->GetDesc(&stageDesc);
-        if(    // stageDesc.MipLevels == 1 &&
-               // stageDesc.ArraySize == 1 &&
-            (stageDesc.Format == DXGI_FORMAT_R32_UINT ||
-             stageDesc.Format == DXGI_FORMAT_R32_TYPELESS || stageDesc.Format == DXGI_FORMAT_R8_UNORM ||
-             stageDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-             stageDesc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
-             stageDesc.Format == DXGI_FORMAT_BC7_UNORM_SRGB))
-        {
-          auto oldFormat = stageDesc.Format;
-          if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
-            stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-          if(oldFormat == DXGI_FORMAT_R32_TYPELESS)
-            stageDesc.Format = DXGI_FORMAT_R32_FLOAT;
-          if(oldFormat == DXGI_FORMAT_R8_UNORM || oldFormat == DXGI_FORMAT_R11G11B10_FLOAT)
-            stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			if (replacement_map.find(id) == replacement_map.end())
+			{
 
-          stageDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+				ID3D11Device *pDevice;
+				this->GetReal()->GetDevice(&pDevice);
+				ID3D11Resource *res;
+				wrap->GetResource(&res);
+				
+				IUnknown *dummy = nullptr;
 
-          ID3D11Texture2D *stagingTex = NULL;
-          ID3D11Texture2D *proxy = NULL;
-          stageDesc.Usage = D3D11_USAGE_DEFAULT;
-          RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &proxy)));
-          ID3D11ShaderResourceView *srv;
-          {
-            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+				if (res->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&dummy) == S_OK)
+				{
+					dummy->Release();
+					WrappedID3D11Texture2D1 *tex = (WrappedID3D11Texture2D1*)res;
+					tex = (WrappedID3D11Texture2D1 *)res;
+					// auto RealRes = tex->GetReal();
+					D3D11_TEXTURE2D_DESC stageDesc;
+					tex->GetDesc(&stageDesc);
 
-            srvDesc.Format = stageDesc.Format;
-            if(stageDesc.ArraySize > 1)
-            {
-              srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-              srvDesc.Texture2DArray.ArraySize = stageDesc.ArraySize;
-              srvDesc.Texture2DArray.FirstArraySlice = 0;
-              srvDesc.Texture2DArray.MipLevels = stageDesc.MipLevels;
-              srvDesc.Texture2DArray.MostDetailedMip = 0;
-            }
-            else
-            {
-              srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-              srvDesc.Texture2D.MipLevels = stageDesc.MipLevels;
-              srvDesc.Texture2D.MostDetailedMip = 0;
-            }
+					if (    // stageDesc.MipLevels == 1 &&
+								 // stageDesc.ArraySize == 1 &&
+						(stageDesc.Format == DXGI_FORMAT_R32_UINT ||
+							stageDesc.Format == DXGI_FORMAT_R32_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_R8G8_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_R8G8_UINT||
+							stageDesc.Format == DXGI_FORMAT_R8G8_UNORM||
+							stageDesc.Format == DXGI_FORMAT_R8G8_SNORM||
+							stageDesc.Format == DXGI_FORMAT_R32_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R16G16_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R16_UINT ||
+							stageDesc.Format == DXGI_FORMAT_R16_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_R16_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R8_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT||
+							stageDesc.Format == DXGI_FORMAT_R32G8X24_TYPELESS||
+							stageDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16G16B16A16_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_BC6H_SF16 ||
+							stageDesc.Format == DXGI_FORMAT_BC6H_TYPELESS||
+							stageDesc.Format == DXGI_FORMAT_BC6H_UF16 ||
+							stageDesc.Format == DXGI_FORMAT_BC1_TYPELESS||
+							stageDesc.Format == DXGI_FORMAT_BC7_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_BC7_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_BC7_UNORM_SRGB))
+					{
+						auto oldFormat = stageDesc.Format;
+						if (
+							oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB ||
+							oldFormat == DXGI_FORMAT_BC7_UNORM ||
+							oldFormat == DXGI_FORMAT_R8G8_TYPELESS ||
+							oldFormat == DXGI_FORMAT_R8G8_UINT ||
+							oldFormat == DXGI_FORMAT_R8G8_UNORM ||
+							oldFormat == DXGI_FORMAT_R8G8_SNORM ||
+							oldFormat == DXGI_FORMAT_D24_UNORM_S8_UINT ||
+							oldFormat == DXGI_FORMAT_R32G8X24_TYPELESS ||
+							oldFormat == DXGI_FORMAT_BC6H_SF16 ||
+							oldFormat == DXGI_FORMAT_BC6H_TYPELESS||
+							oldFormat == DXGI_FORMAT_BC1_TYPELESS ||
+							oldFormat == DXGI_FORMAT_BC6H_UF16 ||
+							oldFormat == DXGI_FORMAT_BC7_TYPELESS ||
+							oldFormat == DXGI_FORMAT_R8_UNORM ||
+							oldFormat == DXGI_FORMAT_R16_TYPELESS ||
+							oldFormat == DXGI_FORMAT_R16G16B16A16_UNORM ||
+							oldFormat == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+							oldFormat == DXGI_FORMAT_R16_FLOAT ||
+							oldFormat == DXGI_FORMAT_R16G16_FLOAT ||
+							oldFormat == DXGI_FORMAT_R16_UINT ||
+							oldFormat == DXGI_FORMAT_R16_UNORM ||
+							oldFormat == DXGI_FORMAT_R11G11B10_FLOAT
+							)
+							stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 
-            RDCASSERT(SUCCEEDED(pDevice->CreateShaderResourceView(proxy, &srvDesc, &srv)));
-          }
-          stageDesc.MiscFlags = 0;
-          stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
-          stageDesc.BindFlags = 0;
-          stageDesc.Usage = D3D11_USAGE_STAGING;
+						if (
+							oldFormat == DXGI_FORMAT_R32_TYPELESS
+							)
+							stageDesc.Format = DXGI_FORMAT_R32_FLOAT;
 
-          RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &stagingTex)));
-          D3D11_MAPPED_SUBRESOURCE mappedRes{};
-          for(unsigned mip = 0; mip < stageDesc.MipLevels * stageDesc.ArraySize; mip++)
-          {
-            RDCASSERT(
-                SUCCEEDED(this->GetReal()->Map(stagingTex, mip, D3D11_MAP_WRITE, 0, &mappedRes)));
-            auto pitch = GetResourcePitchForSubresource(this->GetReal(), stagingTex, mip);
+						stageDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+						//
+						//stageDesc.Width = 512;
+						//stageDesc.Height = 512;
+						//stageDesc.MipLevels = 9;
+						stageDesc.MiscFlags &= ~D3D11_RESOURCE_MISC_GENERATE_MIPS;
+						//
+						ID3D11Texture2D *stagingTex = NULL;
+						ID3D11Texture2D *proxy = NULL;
+						stageDesc.Usage = D3D11_USAGE_DEFAULT;
+						RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &proxy)));
+						ID3D11ShaderResourceView *srv;
+						{
+							D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 
-            // if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
-            {
-              unsigned *typed_data = (unsigned *)mappedRes.pData;
-              for(unsigned y = 0; y < (stageDesc.Height >> (mip % stageDesc.MipLevels)); y++)
-              {
-                for(unsigned x = 0; x < (stageDesc.Width >> (mip % stageDesc.MipLevels)); x++)
-                {
-                  typed_data[x + y * pitch.m_RowPitch / 4] =
-                      (((x / step) & 1) ^ ((y / step) & 1)) == 0 ? first_val : second_val;
-                }
-              }
-            }
-            /* else
-               memset((void *)mappedRes.pData, -1, (pitch.m_RowPitch * stageDesc.Height));*/
-            this->GetReal()->Unmap(stagingTex, mip);
-          }
-          this->GetReal()->CopyResource(proxy, stagingTex);
-          replacement_map.insert({id, srv});
-          stagingTex->Release();
-          // proxy->Release();
-        }
-        // RealRes->Release();
-        pDevice->Release();
-        tex->Release();
-      }
+							srvDesc.Format = stageDesc.Format;
+							if (stageDesc.ArraySize > 1)
+							{
+								srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+								srvDesc.Texture2DArray.ArraySize = stageDesc.ArraySize;
+								srvDesc.Texture2DArray.FirstArraySlice = 0;
+								srvDesc.Texture2DArray.MipLevels = stageDesc.MipLevels;
+								srvDesc.Texture2DArray.MostDetailedMip = 0;
+							}
+							else
+							{
+								srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+								srvDesc.Texture2D.MipLevels = stageDesc.MipLevels;
+								srvDesc.Texture2D.MostDetailedMip = 0;
+							}
+
+							RDCASSERT(SUCCEEDED(pDevice->CreateShaderResourceView(proxy, &srvDesc, &srv)));
+						}
+						stageDesc.MiscFlags = 0;
+						stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+						stageDesc.BindFlags = 0;
+						stageDesc.Usage = D3D11_USAGE_STAGING;
+
+						RDCASSERT(SUCCEEDED(pDevice->CreateTexture2D(&stageDesc, NULL, &stagingTex)));
+						D3D11_MAPPED_SUBRESOURCE mappedRes{};
+						for (unsigned mip = 0; mip < stageDesc.MipLevels * stageDesc.ArraySize; mip++)
+						{
+							RDCASSERT(
+								SUCCEEDED(this->GetReal()->Map(stagingTex, mip, D3D11_MAP_WRITE, 0, &mappedRes)));
+							//auto pitch = mappedRes.RowPitch;// GetResourcePitchForSubresource(this->GetReal(), stagingTex, mip);
+							RDCASSERT(mappedRes.RowPitch);
+							// if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
+							{
+								unsigned *typed_data = (unsigned *)mappedRes.pData;
+								for (unsigned y = 0; y < (stageDesc.Height >> (mip % stageDesc.MipLevels)); y++)
+								{
+									for (unsigned x = 0; x < (stageDesc.Width >> (mip % stageDesc.MipLevels)); x++)
+									{
+										typed_data[x + y * mappedRes.RowPitch / 4] =
+											(((x / step) & 1) ^ ((y / step) & 1)) == 0 ? first_val : second_val;
+									}
+								}
+							}
+							/* else
+								 memset((void *)mappedRes.pData, -1, (pitch.m_RowPitch * stageDesc.Height));*/
+							this->GetReal()->Unmap(stagingTex, mip);
+						}
+						this->GetReal()->CopyResource(proxy, stagingTex);
+						replacement_map.insert({ id, srv });
+						stagingTex->Release();
+						// proxy->Release();
+					}
+					// RealRes->Release();
+					pDevice->Release();
+					tex->Release();
+				}
+				else if (res->QueryInterface(__uuidof(ID3D11Texture3D), (void**)&dummy) == S_OK)
+				{
+					dummy->Release();
+					WrappedID3D11Texture3D1 *tex = (WrappedID3D11Texture3D1*)res;
+					// auto RealRes = tex->GetReal();
+					D3D11_TEXTURE3D_DESC stageDesc;
+					tex->GetDesc(&stageDesc);
+
+					if (    // stageDesc.MipLevels == 1 &&
+								 // stageDesc.ArraySize == 1 &&
+						(stageDesc.Format == DXGI_FORMAT_R32_UINT ||
+							stageDesc.Format == DXGI_FORMAT_R32_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_R32_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R16_UINT ||
+							stageDesc.Format == DXGI_FORMAT_R16_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_R16_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R8_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16G16B16A16_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
+							stageDesc.Format == DXGI_FORMAT_BC7_TYPELESS ||
+							stageDesc.Format == DXGI_FORMAT_BC7_UNORM ||
+							stageDesc.Format == DXGI_FORMAT_BC6H_SF16 ||
+							stageDesc.Format == DXGI_FORMAT_BC6H_TYPELESS||
+							stageDesc.Format == DXGI_FORMAT_BC6H_UF16 ||
+							stageDesc.Format == DXGI_FORMAT_BC1_TYPELESS||
+							stageDesc.Format == DXGI_FORMAT_BC7_UNORM_SRGB))
+					{
+						auto oldFormat = stageDesc.Format;
+						if (
+							oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB ||
+							oldFormat == DXGI_FORMAT_BC7_UNORM ||
+							oldFormat == DXGI_FORMAT_BC6H_SF16 ||
+							oldFormat == DXGI_FORMAT_BC6H_TYPELESS||
+							oldFormat == DXGI_FORMAT_BC6H_UF16 ||
+							oldFormat == DXGI_FORMAT_BC7_TYPELESS ||
+							oldFormat == DXGI_FORMAT_R8_UNORM ||
+							oldFormat == DXGI_FORMAT_R16_TYPELESS ||
+							oldFormat == DXGI_FORMAT_R16G16B16A16_UNORM ||
+							oldFormat == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+							oldFormat == DXGI_FORMAT_R16_FLOAT ||
+							oldFormat == DXGI_FORMAT_R16_UINT ||
+							oldFormat == DXGI_FORMAT_R16_UNORM ||
+							oldFormat == DXGI_FORMAT_R11G11B10_FLOAT
+							)
+							stageDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+						if (
+							oldFormat == DXGI_FORMAT_R32_TYPELESS
+							)
+							stageDesc.Format = DXGI_FORMAT_R32_FLOAT;
+
+						stageDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+						//
+						//stageDesc.Width = 512;
+						//stageDesc.Height = 512;
+						//stageDesc.MipLevels = 9;
+						stageDesc.MiscFlags &= ~D3D11_RESOURCE_MISC_GENERATE_MIPS;
+						//
+						ID3D11Texture3D *stagingTex = NULL;
+						ID3D11Texture3D *proxy = NULL;
+						stageDesc.Usage = D3D11_USAGE_DEFAULT;
+						RDCASSERT(SUCCEEDED(pDevice->CreateTexture3D(&stageDesc, NULL, &proxy)));
+						ID3D11ShaderResourceView *srv;
+						{
+							D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+
+							srvDesc.Format = stageDesc.Format;
+							{
+								srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+								srvDesc.Texture3D.MipLevels = stageDesc.MipLevels;
+								srvDesc.Texture3D.MostDetailedMip = 0;
+							}
+
+							RDCASSERT(SUCCEEDED(pDevice->CreateShaderResourceView(proxy, &srvDesc, &srv)));
+						}
+						stageDesc.MiscFlags = 0;
+						stageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+						stageDesc.BindFlags = 0;
+						stageDesc.Usage = D3D11_USAGE_STAGING;
+
+						RDCASSERT(SUCCEEDED(pDevice->CreateTexture3D(&stageDesc, NULL, &stagingTex)));
+						D3D11_MAPPED_SUBRESOURCE mappedRes{};
+						for (unsigned mip = 0; mip < stageDesc.MipLevels; mip++)
+						{
+							RDCASSERT(
+								SUCCEEDED(this->GetReal()->Map(stagingTex, mip, D3D11_MAP_WRITE, 0, &mappedRes)));
+							//auto pitch = mappedRes.RowPitch;// GetResourcePitchForSubresource(this->GetReal(), stagingTex, mip);
+							RDCASSERT(mappedRes.RowPitch);
+							// if(oldFormat == DXGI_FORMAT_BC7_UNORM_SRGB)
+							{
+								unsigned *typed_data = (unsigned *)mappedRes.pData;
+								for (unsigned y = 0; y < (stageDesc.Height >> (mip % stageDesc.MipLevels)); y++)
+								{
+									for (unsigned x = 0; x < (stageDesc.Width >> (mip % stageDesc.MipLevels)); x++)
+									{
+										for (unsigned z = 0; z < (stageDesc.Depth >> (mip % stageDesc.MipLevels)); z++)
+										{
+											typed_data[x + y * mappedRes.RowPitch / 4 + z * mappedRes.DepthPitch / 4] =
+												(((x / step) & 1) ^ ((y / step) & 1)) == 0 ? first_val : second_val;
+										}
+									}
+								}
+							}
+							/* else
+								 memset((void *)mappedRes.pData, -1, (pitch.m_RowPitch * stageDesc.Height));*/
+							this->GetReal()->Unmap(stagingTex, mip);
+						}
+						this->GetReal()->CopyResource(proxy, stagingTex);
+						replacement_map.insert({ id, srv });
+						stagingTex->Release();
+						// proxy->Release();
+					}
+					// RealRes->Release();
+					pDevice->Release();
+					tex->Release();
+				}
+			}
       if(replacement_map.find(id) != replacement_map.end())
         return replacement_map.find(id)->second;
     }
@@ -2917,7 +3467,7 @@ void WrappedID3D11DeviceContext::PSSetShaderResources(
       MarkResourceReferenced(GetViewResourceResID(ppShaderResourceViews[i]), eFrameRef_Read);
     }
 
-    SRVs[i] = UNWRAP(WrappedID3D11ShaderResourceView1, ppShaderResourceViews[i]);
+    SRVs[i] = ReplaceOrUnwrap(ppShaderResourceViews[i]);
   }
 
   SERIALISE_TIME_CALL(m_pRealContext->PSSetShaderResources(StartSlot, NumViews, SRVs));
@@ -4808,7 +5358,7 @@ void WrappedID3D11DeviceContext::CSSetShaderResources(
       MarkResourceReferenced(GetViewResourceResID(ppShaderResourceViews[i]), eFrameRef_Read);
     }
 
-    SRVs[i] = UNWRAP(WrappedID3D11ShaderResourceView1, ppShaderResourceViews[i]);
+    SRVs[i] = ReplaceOrUnwrap(ppShaderResourceViews[i]);
   }
 
   SERIALISE_TIME_CALL(m_pRealContext->CSSetShaderResources(StartSlot, NumViews, SRVs));

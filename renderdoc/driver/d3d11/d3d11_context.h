@@ -267,11 +267,42 @@ private:
   SERIALISED_ID3D11CONTEXT_MARKER_FUNCTIONS();
 
 public:
+	//
+	bool replace_textures = true;
 	std::set<ResourceId> disabledResources;
   std::map<ResourceId, ID3D11ShaderResourceView *> replacement_map;
   unsigned first_val = 0, second_val = 0xffffffff, step = 32;
   ID3D11ShaderResourceView *ReplaceOrUnwrap(ID3D11ShaderResourceView *in_srv);
   void resetRemappings();
+	//
+	struct ShaderSet {
+		ID3D11VertexShader *vs;
+		ID3D11PixelShader *ps;
+		ID3D11InputLayout *input_layout;
+	};
+	struct Sphere_Wrapper {
+		ID3D11Buffer *vertex_buffer;
+		ID3D11Buffer *index_buffer;
+		uint32_t index_count;
+	} sphere_wrapper = Sphere_Wrapper{};
+	std::vector<ShaderSet> shader_sets;
+	// EID->(shader_set, count)
+	std::map<uint32_t, std::pair<int32_t, uint32_t>> sphere_injections;
+	void draw_spheres(int32_t set, uint32_t count);
+	int32_t CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle);
+	void PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count);
+	void ClearSpheres() { sphere_injections.clear(); }
+	// Dispatch injection
+	std::vector<ID3D11ComputeShader*> compute_sets;
+	struct DispatchParams {
+		int32_t set_id;
+		uint32_t x, y, z;
+	};
+	std::map<uint32_t, DispatchParams> compute_injections;
+	void InjectDispatch(uint32_t eid, DispatchParams params);
+	int32_t CreateComputeSet(char const *filename, int32_t old_handle);
+	void PutDispatch(int32_t set_handle, uint32_t eid, uint32_t count_x, uint32_t count_y, uint32_t count_z);
+	//
 
   static const int AllocPoolCount = 1024;
   static const int AllocPoolMaxByteSize = 3 * 1024 * 1024;

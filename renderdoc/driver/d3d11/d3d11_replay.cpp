@@ -195,7 +195,7 @@ void D3D11Replay::CreateResources()
 
   ID3D11Device *d3dDevice = m_pDevice->GetReal();
 
-  if(countersAMD && countersAMD->Init(AMDCounters::ApiType::Dx11, (void *)d3dDevice))
+  /*if(countersAMD && countersAMD->Init(AMDCounters::ApiType::Dx11, (void *)d3dDevice))
   {
     m_pAMDCounters = countersAMD;
   }
@@ -203,7 +203,7 @@ void D3D11Replay::CreateResources()
   {
     delete countersAMD;
     m_pAMDCounters = NULL;
-  }
+  }*/
 
   if(countersNV && countersNV->Init(d3dDevice))
   {
@@ -260,8 +260,12 @@ void D3D11Replay::ToggleTexture(ResourceId id)
     id = ((WrappedID3D11ShaderResourceView1*)view)->GetResourceResID();
   }*/
   // id = m_pDevice->GetResourceManager()->GetLiveID(id);
-  if(m_pImmediateContext->disabledResources.find(id) != m_pImmediateContext->disabledResources.end())
-    m_pImmediateContext->disabledResources.erase(id);
+	if (m_pImmediateContext->disabledResources.find(id) != m_pImmediateContext->disabledResources.end()) {
+		m_pImmediateContext->replacement_map[id]->Release();
+		m_pImmediateContext->replacement_map.erase(id);
+		m_pImmediateContext->disabledResources.erase(id);
+	}
+    
   else
     m_pImmediateContext->disabledResources.insert(id);
   // auto it2D = WrappedID3D11Texture2D1::m_TextureList.find(id);
@@ -291,6 +295,33 @@ bool D3D11Replay::SetToggleTextureParams(uint32_t firstVal, uint32_t secondVal, 
   //if(change)
   //  m_pImmediateContext->resetRemappings();
   return change;
+}
+
+int32_t D3D11Replay::CreateShaderSet(char const *vs_filename, char const *ps_filename, int32_t old_handle)
+{
+	return m_pImmediateContext->CreateShaderSet(vs_filename, ps_filename, old_handle);
+}
+
+void D3D11Replay::ClearSpheres() { m_pImmediateContext->ClearSpheres(); }
+
+void D3D11Replay::PutSpheres(int32_t set_handle, uint32_t eid, uint32_t count)
+{
+	return m_pImmediateContext->PutSpheres(set_handle, eid, count);
+}
+
+// Dispatch injection
+int32_t D3D11Replay::CreateComputeSet(char const *filename, int32_t old_handle)
+{
+	return m_pImmediateContext->CreateComputeSet(filename, old_handle);
+}
+void D3D11Replay::PutDispatch(
+	int32_t set_handle,
+	uint32_t eid, uint32_t count_x, uint32_t count_y,
+	uint32_t count_z)
+{
+	m_pImmediateContext->PutDispatch(set_handle,
+	eid, count_x, count_y,
+	count_z);
 }
 
 void D3D11Replay::RefreshReplacements()

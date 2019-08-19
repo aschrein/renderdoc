@@ -2071,7 +2071,7 @@ void TextureViewer::OpenResourceContextMenu(ResourceId id, bool input,
   QObject::connect(&toggleResource, &QAction::triggered, [&] {
     m_Ctx.Replay().AsyncInvoke([&](IReplayController *rc) {
       TextureDescription *tex = m_Ctx.GetTexture(id);
-      if(tex && tex->dimension == 2)
+      if(tex)
         rc->ToggleTexture(id);
     });
     if(m_Ctx.IsCaptureLoaded())

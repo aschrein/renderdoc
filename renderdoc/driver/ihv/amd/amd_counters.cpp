@@ -140,7 +140,7 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
   m_pGPUPerfAPI = new GPAFunctionTable();
   if(getFuncTable)
   {
-    GPA_Status gpaStatus = getFuncTable((void *)m_pGPUPerfAPI);
+    GPA_Status gpaStatus = getFuncTable((void *)&m_pGPUPerfAPI);
 
     if(AMD_FAILED(gpaStatus))
     {
